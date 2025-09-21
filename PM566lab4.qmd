@@ -1,5 +1,5 @@
 ---
-title: "PM566 Lab4"
+title: "PM566lab4"
 author: "Yuhan Meng"
 format: 
   html:
