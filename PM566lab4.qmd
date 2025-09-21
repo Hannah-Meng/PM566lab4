@@ -1,0 +1,154 @@
+---
+title: "PM566 Lab4"
+author: "Yuhan Meng"
+format: 
+  html:
+    self-contained: true
+    toc: true        
+---
+
+```{r}
+if (!file.exists("met_all.gz"))
+  download.file(
+    url = "https://raw.githubusercontent.com/USCbiostats/data-science-data/master/02_met/met_all.gz",
+    destfile = "met_all.gz",
+    method   = "libcurl",
+    timeout  = 60
+    )
+met <- data.table::fread("met_all.gz")
+```
+
+```{r}
+library(dplyr)
+library(lubridate)
+library(tidyverse)
+met2<-met[temp>-17][elev==9999.0, elev:=NA]
+met[, week:=week(as.Date(paste(year, month, day, sep = "-")))]
+met<-met[week==min(week, na.rm = TRUE)]
+library(data.table)
+met_avg<-met[
+  ,
+  .(
+    temp=mean(temp, na.rm=TRUE),
+    rh = mean(rh, na.rm=TRUE),
+    wind.sp = mean(wind.sp, na.rm=TRUE),
+    vis.dist = mean(vis.dist, na.rm=TRUE),
+    dew.point = mean(dew.point, na.rm=TRUE),
+    lat = mean(lat, na.rm=TRUE),
+    lon = mean(lon, na.rm=TRUE),
+    elev = mean(elev, na.rm=TRUE)
+  ),
+  by = USAFID
+  ]
+```
+
+```{r}
+met_avg$region <- ifelse(met_avg$lon > -98 & met_avg$lat > 39.71, "northeast",
+                  ifelse(met_avg$lon > -98 & met_avg$lat <= 39.71, "southeast",
+                  ifelse(met_avg$lon <= -98 & met_avg$lat > 39.71, "northwest",
+                         "southwest")))
+met_avg$elev_cat<-ifelse(met_avg$elev>252,"high","low")
+table(met_avg$region)
+table(met_avg$elev_cat)
+```
+
+```{r}
+library(ggplot2)
+met_avg %>%
+  filter(!is.na(wind.sp),!is.na(region))%>%
+  ggplot(aes(x = 1,y = wind.sp))+geom_violin(trim=FALSE)+facet_wrap(~ region,nrow = 2)+labs(x=NULL,y="wind.sp(m/s)", title="wind speed by region(week1)")
+```
+
+Description of the graph: we can see that the northeast region shows the largest range of wind speed and has few extreme wind speed at about 12m/s. The northwest and southwest regions have moderate wind speeds, mostly between 2 and 6m/s, while the southeast region shows the lowest wind speeds, rarely exceeding 4m/s.
+
+```{r}
+met_avg %>%
+  filter(!is.na(dew.point), !is.na(wind.sp)) %>%
+  ggplot(aes(x = dew.point, y = wind.sp, color = region)) +
+  geom_jitter() +
+  stat_smooth(method = "lm")
+
+```
+
+Description of the graph: across all four regions, wind speed shows little to no linear association with dew point temperature.
+
+```{r}
+met_avg%>%
+  filter(!is.na(elev_cat),!is.na(region)) %>%
+  ggplot()+
+  geom_bar(aes(x = elev_cat, fill = region),position="dodge")+
+  scale_fill_brewer(palette = "PuOr")+
+  labs(title="Number of weather stations by elevation category and region",
+       x="Elevation Category",y="Count")+
+  theme_bw()
+```
+
+Description of the graph: we can see that most weather stations are located in the southeast at low elevation, while the northeast has the highest number of stations in the high elevation category. The other regions have relatively fewer stations across both categories.
+
+```{r}
+library(dplyr)
+library(ggplot2)
+met_avg%>%
+  filter(!is.na(dew.point),!is.na(wind.sp)) %>%
+  ggplot(aes(x = region, y = dew.point ))+
+  stat_summary(fun.data = "mean_sdl",geom = "errorbar")+
+  stat_summary(fun.data = "mean_sdl")
+  
+```
+
+Description of the graph: we can see that the southeast shows the highest average dew point, while the northwest and southwest have lower averages. The northeast is intermediate, and all regions show wide variability.
+
+```{r}
+library(dplyr)
+library(leaflet)
+met_avg2<-met_avg[!is.na(met_avg$rh)]
+  top10<-met_avg2[rank(met_avg2$rh)<=10]
+rh_pal=colorNumeric(c('blue','purple','red'),domain = met_avg2$rh)
+leaflet(met_avg2)%>%
+  addProviderTiles("OpenStreetMap")%>%
+  addCircles(
+    lat = ~lat,lng = ~lon,
+    color = ~rh_pal(rh),fillColor = ~rh_pal(rh),
+    opacity = 1,fillOpacity = 0.8,radius = 500
+    ,label = ~paste0(round(rh,2),"% RH")
+  )%>%
+  addMarkers(
+    data = top10,
+    lat = ~lat, lng = ~lon,
+    label = ~paste0("Top RH: ", round(rh, 2), "%")
+  ) %>%
+   addLegend(
+    position = "bottomleft",
+    pal = rh_pal, values = ~rh,
+    title = "Relative Humidity (%)",
+    opacity = 1
+  )
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(ggthemes)
+library(maps)
+map_df <- met_avg %>%
+  filter(!is.na(rh), !is.na(lat), !is.na(lon))
+top10  <- map_df %>% slice_max(rh, n = 10, with_ties = FALSE)
+us <- map_data("state")
+ggplot() +
+  geom_polygon(data = us, aes(long, lat, group = group),
+               fill = "grey95", color = "white", linewidth = 0.2) +
+  geom_point(data = map_df,
+             aes(x = lon, y = lat, color = rh), alpha = 0.75, size = 1.8) +
+  geom_point(data = top10,
+             aes(x = lon, y = lat),
+             shape = 21, size = 3.6, stroke = 1, fill = NA, color = "black") +
+  scale_color_gradientn(colours = c("blue","purple","red"), name = "RH (%)") +  # 连续配色
+  coord_quickmap(xlim = c(-125, -66), ylim = c(24, 50), expand = FALSE) +
+  labs(title = "Relative Humidity across the US",
+       subtitle = "Top 10 stations highlighted",
+       x = NULL, y = NULL) +
+  theme_economist() +                     
+  theme(legend.position = "bottom",
+        panel.grid.minor = element_blank())
+
+```
